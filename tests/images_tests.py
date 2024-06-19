@@ -4,8 +4,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from image_matching.main import load_images_from_directory, compute_image_hash, find_duplicates_by_hash, \
-    find_duplicates_in_single_folder, find_duplicates_between_folders
+from image_matching.main import load_image_hashes_from_directory, compute_image_hash, find_duplicates, main
 
 
 class TestImageProcessing(unittest.TestCase):
@@ -27,19 +26,20 @@ class TestImageProcessing(unittest.TestCase):
         self.image2_bytes.seek(0)
         self.image3_bytes.seek(0)
 
-    @patch('os.walk')
-    @patch('PIL.Image.open')
-    def test_load_images_from_directory(self, mock_image_open, mock_os_walk):
+    @patch('image_matching.main.os.walk')
+    @patch('image_matching.main.Image.open')
+    def test_load_image_hashes_from_directory(self, mock_image_open, mock_os_walk):
         mock_os_walk.return_value = [
             ('/fake_directory', ('subdir',), ('image1.jpg', 'image2.jpg')),
         ]
 
         mock_image_open.side_effect = [Image.open(self.image1_bytes), Image.open(self.image2_bytes)]
 
-        images, paths = load_images_from_directory('/fake_directory')
+        hash_dict = load_image_hashes_from_directory('/fake_directory')
 
-        self.assertEqual(len(images), 2)
-        self.assertEqual(paths, ['/fake_directory/image1.jpg', '/fake_directory/image2.jpg'])
+        self.assertEqual(len(hash_dict), 2)
+        self.assertIn(compute_image_hash(self.image1), hash_dict)
+        self.assertIn(compute_image_hash(self.image2), hash_dict)
 
     def test_compute_image_hash(self):
         hash1 = compute_image_hash(self.image1)
@@ -49,33 +49,56 @@ class TestImageProcessing(unittest.TestCase):
         self.assertEqual(hash1, hash3)
         self.assertNotEqual(hash1, hash2)
 
-    def test_find_duplicates_by_hash(self):
-        images = [self.image1, self.image2, self.image3]
-        paths = ['path/image1.jpg', 'path/image2.jpg', 'path/image3.jpg']
+    def test_find_duplicates_in_single_hash_dict(self):
+        hash_dict = {
+            compute_image_hash(self.image1): ['path/image1.jpg', 'path/image3.jpg'],
+            compute_image_hash(self.image2): ['path/image2.jpg']
+        }
 
-        duplicates = find_duplicates_by_hash(images, paths)
+        duplicates = find_duplicates(hash_dict)
 
         self.assertEqual(len(duplicates), 1)
-        self.assertEqual(duplicates[0], ('path/image3.jpg', 'path/image1.jpg'))
+        self.assertEqual(duplicates[0], ('path/image1.jpg', 'path/image3.jpg'))
 
-    @patch('main_module.load_images_from_directory')
+    def test_find_duplicates_between_two_hash_dicts(self):
+        hash_dict1 = {
+            compute_image_hash(self.image1): ['dir1/image1.jpg'],
+            compute_image_hash(self.image2): ['dir1/image2.jpg']
+        }
+        hash_dict2 = {
+            compute_image_hash(self.image3): ['dir2/image3.jpg']
+        }
+
+        duplicates = find_duplicates(hash_dict1, hash_dict2)
+
+        self.assertEqual(len(duplicates), 1)
+        self.assertEqual(duplicates[0], ('dir2/image3.jpg', 'dir1/image1.jpg'))
+
+    @patch('image_matching.main.load_image_hashes_from_directory')
     def test_find_duplicates_in_single_folder(self, mock_load_images):
-        mock_load_images.return_value = (
-        [self.image1, self.image2, self.image3], ['path/image1.jpg', 'path/image2.jpg', 'path/image3.jpg'])
+        mock_load_images.return_value = {
+            compute_image_hash(self.image1): ['path/image1.jpg', 'path/image3.jpg'],
+            compute_image_hash(self.image2): ['path/image2.jpg']
+        }
 
-        duplicates = find_duplicates_in_single_folder('/fake_directory')
+        duplicates = main(single_folder='/fake_directory')
 
         self.assertEqual(len(duplicates), 1)
-        self.assertEqual(duplicates[0], ('path/image3.jpg', 'path/image1.jpg'))
+        self.assertEqual(duplicates[0], ('path/image1.jpg', 'path/image3.jpg'))
 
-    @patch('main_module.load_images_from_directory')
+    @patch('image_matching.main.load_image_hashes_from_directory')
     def test_find_duplicates_between_folders(self, mock_load_images):
         mock_load_images.side_effect = [
-            ([self.image1, self.image2], ['dir1/image1.jpg', 'dir1/image2.jpg']),
-            ([self.image3], ['dir2/image3.jpg'])
+            {
+                compute_image_hash(self.image1): ['dir1/image1.jpg'],
+                compute_image_hash(self.image2): ['dir1/image2.jpg']
+            },
+            {
+                compute_image_hash(self.image3): ['dir2/image3.jpg']
+            }
         ]
 
-        duplicates = find_duplicates_between_folders('/dir1', '/dir2')
+        duplicates = main(folder1='/dir1', folder2='/dir2')
 
         self.assertEqual(len(duplicates), 1)
         self.assertEqual(duplicates[0], ('dir2/image3.jpg', 'dir1/image1.jpg'))
